@@ -2,6 +2,8 @@
 
 Aplicación web estática para Visual Studio Code, Supabase y GitHub Pages. Permite registrar clases y asistencia, listar golfistas por grupo, consultar el historial, ver indicadores y añadir grupos, profesores o golfistas.
 
+> El proyecto Supabase `Academia de Golf` ya fue configurado y cargado el 2 de septiembre de 2026. Los pasos SQL siguientes sólo son necesarios si se instala una copia en otro proyecto.
+
 ## Instalación
 
 1. Abre `supabase/setup.sql`, copia todo y ejecútalo en **Supabase > SQL Editor**.
@@ -25,4 +27,4 @@ El listado oficial de 2026 ya está incorporado. La acción puede repetirse entr
 
 ## Decisión de acceso público
 
-La aplicación no usa contraseña por solicitud del proyecto. Por tanto, cualquier persona con el enlace puede ver y modificar los datos. RLS está habilitado y sólo concede las operaciones necesarias, pero sin identidad no es posible saber quién realizó un cambio ni impedir que un visitante modifique registros. Si más adelante se requiere auditoría, debe añadirse autenticación para profesores o un PIN de edición.
+La aplicación no usa contraseña por solicitud del proyecto. Cualquier persona con el enlace puede consultar, tomar asistencia y añadir golfistas, profesores o grupos. Las políticas RLS bloquean la modificación y eliminación de registros existentes desde la página. Si más adelante se requiere corregir datos desde la interfaz o identificar quién registró una clase, debe añadirse autenticación para profesores o un PIN de edición.

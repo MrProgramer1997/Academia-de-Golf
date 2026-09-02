@@ -146,7 +146,7 @@ function manageView() {
   const professors = state.professors.filter(p => p.active).sort(byName);
   const students = state.students.filter(s => s.active).sort(byName);
   return `<div class="page-heading"><div><h2>Administrar academia</h2><p>Añade golfistas, profesores y grupos desde cero.</p></div></div>
-    <div class="notice" style="margin-bottom:18px"><strong>Módulo público:</strong> no hay contraseña. Toda persona con el enlace podrá consultar y modificar esta información.</div>
+    <div class="notice" style="margin-bottom:18px"><strong>Módulo público:</strong> no hay contraseña. Toda persona con el enlace podrá consultar, registrar asistencias y añadir información. Los registros existentes no se pueden modificar ni borrar desde la página.</div>
     <div class="manage-grid">
       <section class="card"><h3>Nuevo golfista</h3><form id="student-form"><div class="field"><label for="student-action">Acción</label><input id="student-action" required maxlength="30" autocomplete="off" placeholder="Ej. 12345"></div><div class="field"><label for="student-name">Nombre completo</label><input id="student-name" required maxlength="120" autocomplete="off" placeholder="Nombre del golfista"></div><div class="field"><label for="student-group">Grupo</label><select id="student-group" required>${groupOptions(state.groupId)}</select></div><button class="btn btn-secondary" type="submit">Añadir golfista</button></form><div class="manage-list">${students.slice(0, 10).map(s => manageItem(s.name, `Acción ${s.action_code} · ${groupName(s.group_id)}`, "student", s.id)).join("")}${students.length > 10 ? `<small class="muted">Y ${students.length - 10} más en Alumnos por grupos.</small>` : ""}</div></section>
       <section class="card"><h3>Nuevo profesor</h3><form id="professor-form"><div class="field"><label for="professor-name">Nombre completo</label><input id="professor-name" required maxlength="120" autocomplete="off" placeholder="Nombre del profesor"></div><button class="btn btn-secondary" type="submit">Añadir profesor</button></form><div class="manage-list">${professors.map(p => manageItem(p.name, "Profesor activo", "professor", p.id)).join("")}</div></section>
@@ -155,7 +155,7 @@ function manageView() {
 }
 
 function manageItem(title, meta, type, id) {
-  return `<div class="manage-item"><span class="manage-main"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(meta)}</small></span><button class="icon-btn" data-deactivate="${type}" data-id="${id}">Desactivar</button></div>`;
+  return `<div class="manage-item"><span class="manage-main"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(meta)}</small></span></div>`;
 }
 function groupOptions(selected) { return state.groups.filter(g => g.active).sort(byName).map(g => `<option value="${g.id}" ${g.id === selected ? "selected" : ""}>${escapeHtml(g.name)}</option>`).join(""); }
 function professorOptions(selected) { return state.professors.filter(p => p.active).sort(byName).map(p => `<option value="${p.id}" ${p.id === selected ? "selected" : ""}>${escapeHtml(p.name)}</option>`).join(""); }
@@ -180,22 +180,26 @@ function bindEvents() {
   document.querySelector("#student-form")?.addEventListener("submit", addStudent);
   document.querySelector("#professor-form")?.addEventListener("submit", addProfessor);
   document.querySelector("#group-form")?.addEventListener("submit", addGroup);
-  document.querySelectorAll("[data-deactivate]").forEach(btn => btn.addEventListener("click", () => deactivate(btn.dataset.deactivate, btn.dataset.id)));
 }
 
 async function saveAttendance() {
   if (!state.groupId || !state.professorId) return toast("Primero crea un grupo y un profesor.", "error");
   if (!state.selected.size) return toast("Selecciona al menos un golfista presente.", "error");
   state.saving = true; render();
-  const payload = { class_date: state.date, group_id: state.groupId, professor_id: state.professorId, class_type: groupName(state.groupId) };
-  const { data: session, error: sessionError } = await supabase.from("golf_sessions").upsert(payload, { onConflict: "class_date,group_id,professor_id,class_type" }).select("id").single();
-  if (sessionError) { state.saving = false; render(); return toast(sessionError.message, "error"); }
-  const { error: deleteError } = await supabase.from("golf_attendance").delete().eq("session_id", session.id);
-  const rows = [...state.selected].map(student_id => ({ session_id: session.id, student_id }));
-  const { error: insertError } = deleteError ? { error: deleteError } : await supabase.from("golf_attendance").insert(rows);
+  const studentIds = [...state.selected];
+  const { error: insertError } = await supabase.rpc("register_golf_attendance", {
+    p_class_date: state.date,
+    p_group_id: state.groupId,
+    p_professor_id: state.professorId,
+    p_student_ids: studentIds
+  });
   state.saving = false;
-  if (insertError) { render(); return toast(`No se guardó la asistencia: ${insertError.message}`, "error"); }
-  toast(`Asistencia guardada: ${rows.length} golfista${rows.length === 1 ? "" : "s"}.`);
+  if (insertError) {
+    render();
+    const duplicate = insertError.code === "23505";
+    return toast(duplicate ? "Esa clase ya fue registrada y no puede sobrescribirse." : `No se guardó la asistencia: ${insertError.message}`, "error");
+  }
+  toast(`Asistencia guardada: ${studentIds.length} golfista${studentIds.length === 1 ? "" : "s"}.`);
   state.selected.clear(); await loadAll({ quiet: true });
 }
 
@@ -220,14 +224,6 @@ async function addGroup(event) {
   if (error) return toast(error.code === "23505" ? "Ese grupo ya existe." : error.message, "error");
   toast("Grupo añadido correctamente."); await loadAll({ quiet: true });
 }
-async function deactivate(type, id) {
-  const tables = { student: "golf_students", professor: "golf_professors", group: "golf_groups" };
-  if (!confirm("Se ocultará de los listados activos, pero se conservará su historial. ¿Continuar?")) return;
-  const { error } = await supabase.from(tables[type]).update({ active: false }).eq("id", id);
-  if (error) return toast(error.message, "error");
-  toast("Registro desactivado; el historial se conserva."); await loadAll({ quiet: true });
-}
-
 let realtimeTimer;
 supabase.channel("academia-golf-publica")
   .on("postgres_changes", { event: "*", schema: "public", table: "golf_groups" }, scheduleRealtimeLoad)
