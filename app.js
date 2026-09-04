@@ -21,7 +21,7 @@ const state = {
   saving: false,
   groups: [], professors: [], students: [], sessions: [], attendance: [],
   date: new Date().toISOString().slice(0, 10),
-  groupId: "", professorId: "", selected: new Set(),
+  groupId: "", professorId: "", attendanceDraft: new Map(), editingSessionId: "",
   historyGroup: "all", summaryGroup: "all"
 };
 
@@ -34,6 +34,8 @@ const groupName = id => state.groups.find(g => g.id === id)?.name || "Sin grupo"
 const professorName = id => state.professors.find(p => p.id === id)?.name || "Profesor retirado";
 const studentsForGroup = id => state.students.filter(s => s.active && s.group_id === id).sort(byName);
 const attendanceFor = sessionId => state.attendance.filter(a => a.session_id === sessionId);
+const draftFor = studentId => state.attendanceDraft.get(studentId) || { status: "absent", arrivalTime: "" };
+const attendedDraftCount = () => [...state.attendanceDraft.values()].filter(item => item.status !== "absent").length;
 
 function toast(message, type = "success") {
   const node = document.createElement("div");
@@ -50,7 +52,7 @@ async function loadAll({ quiet = false } = {}) {
     supabase.from("golf_professors").select("id,name,active,created_at").order("name"),
     supabase.from("golf_students").select("id,action_code,name,group_id,active,created_at").order("name"),
     supabase.from("golf_sessions").select("id,class_date,class_type,group_id,professor_id,created_at").order("class_date", { ascending: false }).limit(250),
-    supabase.from("golf_attendance").select("session_id,student_id,created_at")
+    supabase.from("golf_attendance").select("session_id,student_id,status,arrival_time,created_at,updated_at")
   ]);
   const error = [groups, professors, students, sessions, attendance].find(result => result.error)?.error;
   if (error) {
@@ -67,7 +69,8 @@ async function loadAll({ quiet = false } = {}) {
   const activeProfessors = state.professors.filter(p => p.active).sort(byName);
   if (!activeGroups.some(g => g.id === state.groupId)) state.groupId = activeGroups[0]?.id || "";
   if (!activeProfessors.some(p => p.id === state.professorId)) state.professorId = activeProfessors[0]?.id || "";
-  state.selected = new Set([...state.selected].filter(id => studentsForGroup(state.groupId).some(s => s.id === id)));
+  const validStudentIds = new Set(studentsForGroup(state.groupId).map(student => student.id));
+  state.attendanceDraft = new Map([...state.attendanceDraft].filter(([id]) => validStudentIds.has(id)));
   state.loading = false;
   render();
 }
@@ -85,16 +88,21 @@ const empty = (icon, text) => `<div class="empty"><span class="empty-icon">${ico
 
 function attendanceView() {
   const students = studentsForGroup(state.groupId);
-  return `<div class="page-heading"><div><h2>Registrar asistencia</h2><p>Crea la clase y marca los golfistas que asistieron.</p></div></div>
+  const editing = state.sessions.find(session => session.id === state.editingSessionId);
+  const attended = attendedDraftCount();
+  return `<div class="page-heading"><div><h2>${editing ? "Modificar clase" : "Registrar asistencia"}</h2><p>${editing ? "Corrige la fecha, el profesor o la asistencia guardada." : "Crea la clase y registra el estado de cada golfista."}</p></div>${editing ? `<button class="btn btn-secondary" id="cancel-edit">Cancelar modificación</button>` : ""}</div>
     <div class="grid two">
       <section class="card"><h3>Información de la clase</h3><div class="form-grid">
         <div class="field"><label for="class-date">Fecha</label><input id="class-date" type="date" value="${state.date}"></div>
-        <div class="field"><label for="class-group">Grupo</label><select id="class-group">${groupOptions(state.groupId)}</select></div>
+        <div class="field"><label for="class-group">Grupo</label><select id="class-group" ${editing ? "disabled" : ""}>${groupOptions(state.groupId)}</select></div>
         <div class="field"><label for="class-professor">Profesor</label><select id="class-professor">${professorOptions(state.professorId)}</select></div>
         <div class="field"><label>Tipo de clase</label><div class="readonly-field">${escapeHtml(groupName(state.groupId))}</div></div>
-      </div><div class="notice" style="margin-top:16px">Los alumnos se muestran según el grupo seleccionado. Una asistencia guardada puede actualizarse volviendo a elegir la misma fecha, profesor, grupo y tipo de clase.</div></section>
-      <section class="card"><div class="student-toolbar"><strong>Presentes: ${state.selected.size} de ${students.length}</strong><button class="link-btn" id="toggle-all">${state.selected.size === students.length && students.length ? "Desmarcar todos" : "Marcar todos"}</button></div>
-        ${students.length ? `<div class="student-list">${students.map(s => `<label class="student-check ${state.selected.has(s.id) ? "selected" : ""}"><input type="checkbox" data-student="${s.id}" ${state.selected.has(s.id) ? "checked" : ""}><span><span class="student-name">${escapeHtml(s.name)}</span><br><span class="student-action">Acción ${escapeHtml(s.action_code)}</span></span><span class="badge">${escapeHtml(groupName(s.group_id))}</span></label>`).join("")}</div><div class="actions"><button class="btn btn-primary" id="save-attendance" ${state.saving ? "disabled" : ""}>${state.saving ? "Guardando…" : "Guardar asistencia"}</button></div>` : empty("⛳", "Este grupo todavía no tiene golfistas activos.")}
+      </div><div class="notice" style="margin-top:16px">${editing ? "El grupo se mantiene bloqueado para no mezclar golfistas. Puedes cambiar la fecha, el profesor y el estado de asistencia." : "Selecciona Presente o Llegó tarde. Los alumnos que queden como Ausente no suman asistencia."}</div></section>
+      <section class="card"><div class="student-toolbar"><strong>Asistieron: ${attended} de ${students.length}</strong><div><button class="link-btn" id="mark-all-present">Todos presentes</button><button class="link-btn" id="mark-all-absent">Limpiar</button></div></div>
+        ${students.length ? `<div class="student-list">${students.map(student => {
+          const draft = draftFor(student.id);
+          return `<div class="student-status ${draft.status !== "absent" ? "selected" : ""}"><span><span class="student-name">${escapeHtml(student.name)}</span><br><span class="student-action">Acción ${escapeHtml(student.action_code)}</span></span><div class="attendance-controls"><select data-attendance-status="${student.id}" aria-label="Asistencia de ${escapeHtml(student.name)}"><option value="absent" ${draft.status === "absent" ? "selected" : ""}>Ausente</option><option value="present" ${draft.status === "present" ? "selected" : ""}>Presente</option><option value="late" ${draft.status === "late" ? "selected" : ""}>Llegó tarde</option></select>${draft.status === "late" ? `<input type="time" data-arrival-time="${student.id}" value="${escapeHtml(draft.arrivalTime)}" aria-label="Hora de llegada de ${escapeHtml(student.name)}">` : ""}</div></div>`;
+        }).join("")}</div><div class="actions"><button class="btn btn-primary" id="save-attendance" ${state.saving ? "disabled" : ""}>${state.saving ? "Guardando…" : editing ? "Guardar modificaciones" : "Guardar asistencia"}</button></div>` : empty("⛳", "Este grupo todavía no tiene golfistas activos.")}
       </section>
     </div>`;
 }
@@ -105,7 +113,7 @@ function groupsView() {
     <section class="card">${groups.length ? groups.map(group => {
       const members = studentsForGroup(group.id);
       return `<div class="group-block"><div class="group-title"><h3>${escapeHtml(group.name)}</h3><span class="badge">${members.length} golfista${members.length === 1 ? "" : "s"}</span></div>
-        ${members.length ? `<div class="table-wrap"><table><thead><tr><th>Acción</th><th>Golfista</th><th>Grupo</th><th>Asistencias</th></tr></thead><tbody>${members.map(s => `<tr><td>${escapeHtml(s.action_code)}</td><td><strong>${escapeHtml(s.name)}</strong></td><td>${escapeHtml(group.name)}</td><td>${state.attendance.filter(a => a.student_id === s.id).length}</td></tr>`).join("")}</tbody></table></div>` : empty("🏌️", "No hay golfistas en este grupo.")}</div>`;
+        ${members.length ? `<div class="table-wrap"><table><thead><tr><th>Acción</th><th>Golfista</th><th>Grupo</th><th>Asistencias</th><th>Llegadas tarde</th></tr></thead><tbody>${members.map(s => `<tr><td>${escapeHtml(s.action_code)}</td><td><strong>${escapeHtml(s.name)}</strong></td><td>${escapeHtml(group.name)}</td><td>${state.attendance.filter(a => a.student_id === s.id).length}</td><td>${state.attendance.filter(a => a.student_id === s.id && a.status === "late").length}</td></tr>`).join("")}</tbody></table></div>` : empty("🏌️", "No hay golfistas en este grupo.")}</div>`;
     }).join("") : empty("📁", "Crea el primer grupo desde Administrar.")}</section>`;
 }
 
@@ -113,9 +121,10 @@ function historyView() {
   const sessions = state.sessions.filter(s => state.historyGroup === "all" || s.group_id === state.historyGroup);
   return `<div class="page-heading"><div><h2>Historial de clases</h2><p>Revisa quién asistió, con qué profesor y en qué tipo de clase.</p></div><div><label for="history-group">Filtrar por grupo</label><select id="history-group"><option value="all">Todos los grupos</option>${groupOptions(state.historyGroup)}</select></div></div>
     <section class="card">${sessions.length ? `<div class="history-list">${sessions.map(session => {
-      const ids = attendanceFor(session.id).map(a => a.student_id);
-      const names = ids.map(id => state.students.find(s => s.id === id)?.name).filter(Boolean).sort((a,b) => a.localeCompare(b, "es"));
-      return `<article class="session"><div class="session-top"><div><h3>${escapeHtml(session.class_type)} · ${escapeHtml(groupName(session.group_id))}</h3><div class="session-meta">${escapeHtml(formatDate(session.class_date))} · Profesor: ${escapeHtml(professorName(session.professor_id))}</div></div><span class="badge">${names.length} presentes</span></div><p class="session-students">${names.length ? names.map(escapeHtml).join(" · ") : "Sin asistentes registrados"}</p></article>`;
+      const records = attendanceFor(session.id).map(record => ({ ...record, student: state.students.find(student => student.id === record.student_id) })).filter(record => record.student).sort((a,b) => byName(a.student, b.student));
+      const late = records.filter(record => record.status === "late").length;
+      const names = records.map(record => `${escapeHtml(record.student.name)}${record.status === "late" ? ` <span class="late-label">(Tarde${record.arrival_time ? ` ${escapeHtml(record.arrival_time.slice(0, 5))}` : ""})</span>` : ""}`);
+      return `<article class="session"><div class="session-top"><div><h3>${escapeHtml(session.class_type)} · ${escapeHtml(groupName(session.group_id))}</h3><div class="session-meta">${escapeHtml(formatDate(session.class_date))} · Profesor: ${escapeHtml(professorName(session.professor_id))}</div></div><div class="session-actions"><span class="badge">${records.length} asistieron${late ? ` · ${late} tarde` : ""}</span><button class="btn btn-secondary btn-small" data-edit-session="${session.id}">Modificar</button></div></div><p class="session-students">${names.length ? names.join(" · ") : "Sin asistentes registrados"}</p></article>`;
     }).join("")}</div>` : empty("📋", "No hay clases registradas para este filtro.")}</section>`;
 }
 
@@ -123,6 +132,7 @@ function summaryView() {
   const sessions = state.sessions.filter(s => state.summaryGroup === "all" || s.group_id === state.summaryGroup);
   const sessionIds = new Set(sessions.map(s => s.id));
   const attendance = state.attendance.filter(a => sessionIds.has(a.session_id));
+  const lateAttendance = attendance.filter(record => record.status === "late");
   const eligibleStudents = state.students.filter(s => s.active && (state.summaryGroup === "all" || s.group_id === state.summaryGroup)).sort(byName);
   const activeGroups = new Set(sessions.map(s => s.group_id)).size;
   const professorRows = state.professors.filter(p => p.active).sort(byName).map(professor => ({
@@ -130,14 +140,15 @@ function summaryView() {
     total: sessions.filter(session => session.professor_id === professor.id).length
   }));
   return `<div class="page-heading"><div><h2>Resumen de asistencia</h2><p>Indicadores reales de clases y participaciones por grupo.</p></div><div><label for="summary-group">Filtrar por grupo</label><select id="summary-group"><option value="all">Todos los grupos</option>${groupOptions(state.summaryGroup)}</select></div></div>
-    <div class="stats"><div class="stat"><span class="stat-value">${sessions.length}</span><span class="stat-label">Clases realizadas</span></div><div class="stat"><span class="stat-value">${attendance.length}</span><span class="stat-label">Asistencias registradas</span></div><div class="stat"><span class="stat-value">${eligibleStudents.length}</span><span class="stat-label">Golfistas activos</span></div><div class="stat"><span class="stat-value">${activeGroups}</span><span class="stat-label">Grupos con actividad</span></div></div>
+    <div class="stats"><div class="stat"><span class="stat-value">${sessions.length}</span><span class="stat-label">Clases realizadas</span></div><div class="stat"><span class="stat-value">${attendance.length}</span><span class="stat-label">Asistencias registradas</span></div><div class="stat"><span class="stat-value">${lateAttendance.length}</span><span class="stat-label">Llegadas tarde</span></div><div class="stat"><span class="stat-value">${eligibleStudents.length}</span><span class="stat-label">Golfistas activos</span></div></div>
     <div class="grid two summary-detail"><section class="card"><h3>Clases por profesor</h3>${professorRows.length ? `<div class="professor-list">${professorRows.map(row => `<div class="professor-row"><strong>${escapeHtml(row.name)}</strong><span class="badge">${row.total} clase${row.total === 1 ? "" : "s"}</span></div>`).join("")}</div>` : empty("🏌️", "No hay profesores activos.")}</section>
-    <section class="card"><h3>Detalle por golfista</h3>${eligibleStudents.length ? `<div class="table-wrap"><table><thead><tr><th>Acción</th><th>Golfista</th><th>Grupo</th><th>Asistencias</th><th>Clases del grupo</th><th>Participación</th></tr></thead><tbody>${eligibleStudents.map(student => {
+    <section class="card"><h3>Detalle por golfista</h3>${eligibleStudents.length ? `<div class="table-wrap"><table><thead><tr><th>Acción</th><th>Golfista</th><th>Grupo</th><th>Asistencias</th><th>Llegadas tarde</th><th>Clases del grupo</th><th>Participación</th></tr></thead><tbody>${eligibleStudents.map(student => {
       const ownSessions = sessions.filter(s => s.group_id === student.group_id);
       const ownSessionIds = new Set(ownSessions.map(s => s.id));
       const present = state.attendance.filter(a => a.student_id === student.id && ownSessionIds.has(a.session_id)).length;
+      const late = state.attendance.filter(a => a.student_id === student.id && a.status === "late" && ownSessionIds.has(a.session_id)).length;
       const rate = ownSessions.length ? Math.round((present / ownSessions.length) * 100) : 0;
-      return `<tr><td>${escapeHtml(student.action_code)}</td><td><strong>${escapeHtml(student.name)}</strong></td><td>${escapeHtml(groupName(student.group_id))}</td><td>${present}</td><td>${ownSessions.length}</td><td><span class="badge">${rate}%</span></td></tr>`;
+      return `<tr><td>${escapeHtml(student.action_code)}</td><td><strong>${escapeHtml(student.name)}</strong></td><td>${escapeHtml(groupName(student.group_id))}</td><td>${present}</td><td>${late}</td><td>${ownSessions.length}</td><td><span class="badge">${rate}%</span></td></tr>`;
     }).join("")}</tbody></table></div>` : empty("📊", "No hay golfistas para calcular el resumen.")}</section></div>`;
 }
 
@@ -146,7 +157,7 @@ function manageView() {
   const professors = state.professors.filter(p => p.active).sort(byName);
   const students = state.students.filter(s => s.active).sort(byName);
   return `<div class="page-heading"><div><h2>Administrar academia</h2><p>Añade golfistas, profesores y grupos desde cero.</p></div></div>
-    <div class="notice" style="margin-bottom:18px"><strong>Módulo público:</strong> no hay contraseña. Toda persona con el enlace podrá consultar, registrar asistencias y añadir información. Los registros existentes no se pueden modificar ni borrar desde la página.</div>
+    <div class="notice" style="margin-bottom:18px"><strong>Módulo público:</strong> no hay contraseña. Toda persona con el enlace podrá consultar, registrar y modificar clases y asistencias, además de añadir información.</div>
     <div class="manage-grid">
       <section class="card"><h3>Nuevo golfista</h3><form id="student-form"><div class="field"><label for="student-action">Acción</label><input id="student-action" required maxlength="30" autocomplete="off" placeholder="Ej. 12345"></div><div class="field"><label for="student-name">Nombre completo</label><input id="student-name" required maxlength="120" autocomplete="off" placeholder="Nombre del golfista"></div><div class="field"><label for="student-group">Grupo</label><select id="student-group" required>${groupOptions(state.groupId)}</select></div><button class="btn btn-secondary" type="submit">Añadir golfista</button></form><div class="manage-list">${students.slice(0, 10).map(s => manageItem(s.name, `Acción ${s.action_code} · ${groupName(s.group_id)}`, "student", s.id)).join("")}${students.length > 10 ? `<small class="muted">Y ${students.length - 10} más en Alumnos por grupos.</small>` : ""}</div></section>
       <section class="card"><h3>Nuevo profesor</h3><form id="professor-form"><div class="field"><label for="professor-name">Nombre completo</label><input id="professor-name" required maxlength="120" autocomplete="off" placeholder="Nombre del profesor"></div><button class="btn btn-secondary" type="submit">Añadir profesor</button></form><div class="manage-list">${professors.map(p => manageItem(p.name, "Profesor activo", "professor", p.id)).join("")}</div></section>
@@ -168,13 +179,23 @@ function render() {
 }
 
 function bindEvents() {
-  document.querySelectorAll("[data-tab]").forEach(button => button.addEventListener("click", () => { state.tab = button.dataset.tab; state.selected.clear(); render(); window.scrollTo(0, 0); }));
+  document.querySelectorAll("[data-tab]").forEach(button => button.addEventListener("click", () => { state.tab = button.dataset.tab; render(); window.scrollTo(0, 0); }));
   document.querySelector("#class-date")?.addEventListener("change", e => { state.date = e.target.value; });
-  document.querySelector("#class-group")?.addEventListener("change", e => { state.groupId = e.target.value; state.selected.clear(); render(); });
+  document.querySelector("#class-group")?.addEventListener("change", e => { state.groupId = e.target.value; state.attendanceDraft.clear(); render(); });
   document.querySelector("#class-professor")?.addEventListener("change", e => { state.professorId = e.target.value; });
-  document.querySelectorAll("[data-student]").forEach(box => box.addEventListener("change", () => { box.checked ? state.selected.add(box.dataset.student) : state.selected.delete(box.dataset.student); render(); }));
-  document.querySelector("#toggle-all")?.addEventListener("click", () => { const students = studentsForGroup(state.groupId); state.selected = state.selected.size === students.length ? new Set() : new Set(students.map(s => s.id)); render(); });
+  document.querySelectorAll("[data-attendance-status]").forEach(select => select.addEventListener("change", () => {
+    const current = draftFor(select.dataset.attendanceStatus);
+    state.attendanceDraft.set(select.dataset.attendanceStatus, { status: select.value, arrivalTime: select.value === "late" ? current.arrivalTime : "" });
+    render();
+  }));
+  document.querySelectorAll("[data-arrival-time]").forEach(input => input.addEventListener("change", () => {
+    state.attendanceDraft.set(input.dataset.arrivalTime, { status: "late", arrivalTime: input.value });
+  }));
+  document.querySelector("#mark-all-present")?.addEventListener("click", () => { state.attendanceDraft = new Map(studentsForGroup(state.groupId).map(student => [student.id, { status: "present", arrivalTime: "" }])); render(); });
+  document.querySelector("#mark-all-absent")?.addEventListener("click", () => { state.attendanceDraft.clear(); render(); });
   document.querySelector("#save-attendance")?.addEventListener("click", saveAttendance);
+  document.querySelector("#cancel-edit")?.addEventListener("click", cancelEdit);
+  document.querySelectorAll("[data-edit-session]").forEach(button => button.addEventListener("click", () => editSession(button.dataset.editSession)));
   document.querySelector("#history-group")?.addEventListener("change", e => { state.historyGroup = e.target.value; render(); });
   document.querySelector("#summary-group")?.addEventListener("change", e => { state.summaryGroup = e.target.value; render(); });
   document.querySelector("#student-form")?.addEventListener("submit", addStudent);
@@ -184,23 +205,51 @@ function bindEvents() {
 
 async function saveAttendance() {
   if (!state.groupId || !state.professorId) return toast("Primero crea un grupo y un profesor.", "error");
-  if (!state.selected.size) return toast("Selecciona al menos un golfista presente.", "error");
+  const attendance = [...state.attendanceDraft].filter(([, item]) => item.status !== "absent").map(([studentId, item]) => ({ student_id: studentId, status: item.status, arrival_time: item.status === "late" && item.arrivalTime ? item.arrivalTime : null }));
+  if (!attendance.length) return toast("Registra al menos un golfista presente o que llegó tarde.", "error");
   state.saving = true; render();
-  const studentIds = [...state.selected];
-  const { error: insertError } = await supabase.rpc("register_golf_attendance", {
+  const { error: saveError } = await supabase.rpc("save_golf_session", {
+    p_session_id: state.editingSessionId || null,
     p_class_date: state.date,
     p_group_id: state.groupId,
     p_professor_id: state.professorId,
-    p_student_ids: studentIds
+    p_attendance: attendance
   });
   state.saving = false;
-  if (insertError) {
+  if (saveError) {
     render();
-    const duplicate = insertError.code === "23505";
-    return toast(duplicate ? "Esa clase ya fue registrada y no puede sobrescribirse." : `No se guardó la asistencia: ${insertError.message}`, "error");
+    const duplicate = saveError.code === "23505";
+    return toast(duplicate ? "Ya existe otra clase con esa fecha, grupo y profesor." : `No se guardaron los cambios: ${saveError.message}`, "error");
   }
-  toast(`Asistencia guardada: ${studentIds.length} golfista${studentIds.length === 1 ? "" : "s"}.`);
-  state.selected.clear(); await loadAll({ quiet: true });
+  toast(state.editingSessionId ? "Clase modificada correctamente." : `Asistencia guardada: ${attendance.length} golfista${attendance.length === 1 ? "" : "s"}.`);
+  state.editingSessionId = "";
+  state.attendanceDraft.clear();
+  state.tab = "history";
+  await loadAll({ quiet: true });
+}
+
+function editSession(sessionId) {
+  const session = state.sessions.find(item => item.id === sessionId);
+  if (!session) return toast("No se encontró la clase seleccionada.", "error");
+  state.editingSessionId = session.id;
+  state.date = session.class_date;
+  state.groupId = session.group_id;
+  state.professorId = session.professor_id;
+  state.attendanceDraft = new Map(attendanceFor(session.id).map(record => [record.student_id, {
+    status: record.status || "present",
+    arrivalTime: record.arrival_time ? record.arrival_time.slice(0, 5) : ""
+  }]));
+  state.tab = "attendance";
+  render();
+  window.scrollTo(0, 0);
+}
+
+function cancelEdit() {
+  state.editingSessionId = "";
+  state.attendanceDraft.clear();
+  state.date = new Date().toISOString().slice(0, 10);
+  state.tab = "history";
+  render();
 }
 
 async function addStudent(event) {

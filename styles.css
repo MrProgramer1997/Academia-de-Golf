@@ -76,10 +76,10 @@ input:focus, select:focus { outline: 3px solid rgba(47,107,80,.13); border-color
 .student-toolbar strong { color: var(--green-950); font-size: .9rem; }
 .link-btn { border: 0; background: transparent; color: var(--clay); font-size: .78rem; font-weight: 800; }
 .student-list { display: grid; gap: 8px; max-height: 475px; overflow: auto; padding-right: 3px; }
-.student-check { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 11px; padding: 11px 12px; border: 1px solid #e7decf; border-radius: 11px; background: #fffdfa; cursor: pointer; }
-.student-check:hover { border-color: #afc8b9; }
-.student-check.selected { background: var(--green-100); border-color: #92b39f; }
-.student-check input { width: 18px; min-height: 18px; accent-color: var(--green-800); }
+.student-status { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(150px, 230px); align-items: center; gap: 11px; padding: 11px 12px; border: 1px solid #e7decf; border-radius: 11px; background: #fffdfa; }
+.student-status.selected { background: var(--green-100); border-color: #92b39f; }
+.attendance-controls { display: grid; grid-template-columns: 1fr; gap: 7px; }
+.attendance-controls select, .attendance-controls input { min-height: 38px; padding: 7px 9px; background: #fff; }
 .student-name { font-weight: 750; font-size: .88rem; }
 .student-action, .badge { color: var(--muted); font-size: .7rem; }
 .badge { display: inline-flex; padding: 4px 8px; border-radius: 999px; color: var(--green-900); background: var(--green-100); font-weight: 800; }
@@ -105,6 +105,9 @@ tr:last-child td { border-bottom: 0; }
 .session h3 { margin: 0 0 4px; font: 600 1rem Georgia, serif; }
 .session-meta { color: var(--muted); font-size: .76rem; }
 .session-students { margin: 11px 0 0; color: #465049; font-size: .81rem; line-height: 1.55; }
+.session-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.btn-small { min-height: 34px; padding: 6px 10px; font-size: .74rem; }
+.late-label { color: var(--clay); font-weight: 800; }
 .manage-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
 .manage-list { display: grid; gap: 7px; margin-top: 18px; }
 .manage-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid #eee7da; }
@@ -144,5 +147,6 @@ tr:last-child td { border-bottom: 0; }
   .stats { gap: 8px; }
   .stat { padding: 13px; }
   .session-top { display: block; }
-  .session-top .badge { margin-top: 8px; }
+  .session-actions { justify-content: flex-start; margin-top: 10px; }
+  .student-status { grid-template-columns: 1fr; }
 }
